@@ -21,6 +21,7 @@ class Rankings(commands.Cog):
         return name.ljust(width)
 
     # ============ CLASSEMENT GENERAL ============
+
     @app_commands.command(name="classement", description="Classement général (points, victoires, etc.).")
     async def classement(self, interaction: discord.Interaction):
         players = self.data.get_players()
@@ -91,6 +92,7 @@ class Rankings(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     # ============ CLASSEMENT BUTEURS ============
+
     @app_commands.command(name="classement_buts", description="Classement des meilleurs buteurs.")
     async def classement_buts(self, interaction: discord.Interaction):
         players = self.data.get_players()
@@ -135,6 +137,7 @@ class Rankings(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     # ============ CLASSEMENT PASSEURS ============
+
     @app_commands.command(name="classement_passes", description="Classement des meilleurs passeurs.")
     async def classement_passes(self, interaction: discord.Interaction):
         players = self.data.get_players()
@@ -175,6 +178,98 @@ class Rankings(commands.Cog):
 
         if chunk:
             embed.add_field(name="\u200b", value=f"```txt\n{chunk}```", inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
+    # ============ CLASSEMENT STATS (UNE SEULE TABLE) ============
+
+    @app_commands.command(
+        name="classement_stats",
+        description="Classement unique avec toutes les stats : note, tir, passes, physique, influence, gardien."
+    )
+    async def classement_stats(self, interaction: discord.Interaction):
+        players = self.data.get_players()
+        if not players:
+            await interaction.response.send_message("Aucun joueur enregistré.", ephemeral=True)
+            return
+
+        # Tri par note globale, puis tir, passes, nom
+        sorted_players = sorted(
+            players.values(),
+            key=lambda p: (
+                p.get("rating", 0),
+                p.get("tir", 0),
+                p.get("passes", 0),
+                p.get("name", "").lower()
+            ),
+            reverse=True
+        )
+
+        embed = discord.Embed(
+            title="📈 Classement des stats de profil",
+            description="Une seule table avec toutes les notes (sur 10).",
+            color=discord.Color.orange()
+        )
+
+        header_line = (
+            f"{'Pos':^3}  "
+            f"{'Nom':7}  "
+            f"{'Nte':^3}  "
+            f"{'Tir':^3}  "
+            f"{'Pas':^3}  "
+            f"{'Phy':^3}  "
+            f"{'Inf':^3}  "
+            f"{'Gar':^3}  "
+        )
+
+        lines = [header_line]
+
+        for i, p in enumerate(sorted_players, start=1):
+            name_short = self._short_name(p.get("name", "?"), 7)
+
+            def fmt(val):
+                # un float non entier -> 1 décimale, sinon entier
+                if isinstance(val, float) and not val.is_integer():
+                    return f"{val:.1f}"
+                return f"{int(val)}"
+
+            rating = fmt(p.get("rating", 0))
+            tir = fmt(p.get("tir", 0))
+            passes = fmt(p.get("passes", 0))
+            physique = fmt(p.get("physique", 0))
+            influence = fmt(p.get("influence", 0))
+            gardien = fmt(p.get("gardien", 0))
+
+            line = (
+                f"{i:^3}  "
+                f"{name_short}  "
+                f"{rating:^3}  "
+                f"{tir:^3}  "
+                f"{passes:^3}  "
+                f"{physique:^3}  "
+                f"{influence:^3}  "
+                f"{gardien:^3}  "
+            )
+            lines.append(line)
+
+        # On découpe si c'est trop long pour Discord
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 2 > 900:
+                embed.add_field(
+                    name="\u200b",
+                    value=f"```txt\n{chunk}```",
+                    inline=False
+                )
+                chunk = ""
+            chunk += line + "\n"
+
+        if chunk:
+            embed.add_field(
+                name="\u200b",
+                value=f"```txt\n{chunk}```",
+                inline=False
+            )
 
         await interaction.response.send_message(embed=embed)
 

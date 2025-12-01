@@ -61,7 +61,17 @@ class DataManager:
         base_template = {
             "id": None,
             "name": "",
+            # Note globale sur 10 (moyenne des 5 stats)
             "rating": 0,
+
+            # 🔢 Nouvelles stats détaillées
+            "tir": 0,
+            "passes": 0,
+            "physique": 0,
+            "influence": 0,
+            "gardien": 0,
+
+            # Stats de matchs
             "points": 0,
             "wins": 0,
             "losses": 0,
@@ -70,6 +80,10 @@ class DataManager:
             "goals": 0,
             "assists": 0,
             "mvps": 0,
+
+            "card_color": "#1E1E46",   # bleu/violet par défaut
+            "card_tagline": "",
+            "card_border": "#D4AF37",
         }
 
         changed = False
@@ -93,15 +107,53 @@ class DataManager:
         players = self.get_players()
         return players.get(str(user_id))
 
-    def upsert_player(self, user_id: int, name: str, rating: int):
+    def upsert_player(
+        self,
+        user_id: int,
+        name: str,
+        tir: int,
+        passes: int,
+        physique: int,
+        influence: int,
+        gardien: int,
+    ):
+        """
+        Crée ou met à jour un joueur avec 5 stats.
+        La note globale `rating` = moyenne des 5 stats.
+        """
         data = self._read()
         pid = str(user_id)
+
+        # sécurité : clamp entre 0 et 10
+        def clamp_stat(value: int) -> int:
+            try:
+                v = int(value)
+            except ValueError:
+                v = 0
+            return max(0, min(10, v))
+
+        tir = clamp_stat(tir)
+        passes = clamp_stat(passes)
+        physique = clamp_stat(physique)
+        influence = clamp_stat(influence)
+        gardien = clamp_stat(gardien)
+
+        # moyenne des 5 stats
+        rating = (tir + passes + physique + influence + gardien) / 5
+        rating = round(rating, 1)
 
         # modèle de base pour être sûr que tous les champs existent
         base_template = {
             "id": user_id,
             "name": name,
             "rating": rating,
+
+            "tir": tir,
+            "passes": passes,
+            "physique": physique,
+            "influence": influence,
+            "gardien": gardien,
+
             "points": 0,
             "wins": 0,
             "losses": 0,
@@ -110,18 +162,26 @@ class DataManager:
             "goals": 0,
             "assists": 0,
             "mvps": 0,
+            "card_color": "#1E1E46",
+            "card_tagline": "",
+            "card_border": "#D4AF37",
         }
 
         if pid not in data["players"]:
             # Nouveau joueur → on prend le template complet
             data["players"][pid] = base_template
         else:
-            # Joueur existant → on met à jour nom + note
+            # Joueur existant → on met à jour nom + stats + rating
             player = data["players"][pid]
             player["name"] = name
             player["rating"] = rating
+            player["tir"] = tir
+            player["passes"] = passes
+            player["physique"] = physique
+            player["influence"] = influence
+            player["gardien"] = gardien
 
-            # On complète les clés manquantes (cas où ton data.json est ancien)
+            # On complète les clés manquantes (cas vieux data.json)
             for key, default_value in base_template.items():
                 if key not in player:
                     player[key] = default_value
@@ -186,6 +246,18 @@ class DataManager:
 
         self._write(data)
         return data["matches"][str(match_id)]
+
+    def delete_match(self, match_id: int | str):
+        """Supprime un match du fichier data.json. Retourne le match supprimé ou None."""
+        data = self._read()
+        mid = str(match_id)
+
+        if "matches" not in data or mid not in data["matches"]:
+            return None
+
+        removed = data["matches"].pop(mid)
+        self._write(data)
+        return removed
 
     def get_match(self, match_id: int | str):
         data = self._read()

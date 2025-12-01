@@ -3,30 +3,76 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
+from itertools import combinations
+
+# Poids des stats pour l'équilibrage
+STAT_WEIGHTS = {
+    "tir": 5.0,
+    "passes": 5.0,
+    "influence": 4.5,
+    "physique": 2.5,
+    "gardien": 2.0,
+}
+
+# Clés de stats qu'on calcule comme moyennes par équipe (affichage)
+STAT_AVG_KEYS = ("tir", "passes", "physique", "influence", "gardien", "rating")
 
 
-def balance_teams(players_with_rating: list[tuple[int, int]]):
+def _compute_team_avgs(team_ids: list[int], players_stats: dict[int, dict[str, float]]):
+    """Calcule les moyennes de stats pour une équipe."""
+    n = len(team_ids)
+    if n == 0:
+        return {k: 0.0 for k in STAT_AVG_KEYS}
+
+    sums = {k: 0.0 for k in STAT_AVG_KEYS}
+    for pid in team_ids:
+        stats = players_stats[pid]
+        for k in STAT_AVG_KEYS:
+            sums[k] += float(stats.get(k, 0.0))
+
+    return {k: sums[k] / n for k in STAT_AVG_KEYS}
+
+
+def balance_teams(players_stats: dict[int, dict[str, float]]):
     """
-    players_with_rating: [(id, rating), ...] pour 10 joueurs.
-    Retourne (team_a_ids, team_b_ids, sum_a, sum_b)
-    id peut être un id Discord (int > 0) ou un id invité (int négatif).
+    players_stats : {id: {tir, passes, physique, influence, gardien, rating}, ...}
+    Retourne (team_a_ids, team_b_ids, avgs_a, avgs_b)
+
+    On teste toutes les combinaisons possibles (C(10,5)=252),
+    et on prend celle qui minimise la différence de stats pondérée
+    avec les poids définis dans STAT_WEIGHTS.
     """
-    sorted_players = sorted(players_with_rating, key=lambda x: x[1], reverse=True)
+    ids = list(players_stats.keys())
+    n = len(ids)
+    if n % 2 != 0:
+        raise ValueError("Le nombre de joueurs doit être pair pour créer 2 équipes.")
 
-    team_a = []
-    team_b = []
-    sum_a = 0
-    sum_b = 0
+    half = n // 2
+    best = None
+    best_cost = None
 
-    for pid, rating in sorted_players:
-        if len(team_a) < 5 and (sum_a <= sum_b or len(team_b) >= 5):
-            team_a.append(pid)
-            sum_a += rating
-        else:
-            team_b.append(pid)
-            sum_b += rating
+    for combo in combinations(ids, half):
+        team_a = list(combo)
+        team_b = [pid for pid in ids if pid not in combo]
 
-    return team_a, team_b, sum_a, sum_b
+        avgs_a = _compute_team_avgs(team_a, players_stats)
+        avgs_b = _compute_team_avgs(team_b, players_stats)
+
+        # coût = somme des écarts au carré sur chaque stat, pondéré
+        cost = 0.0
+        for key, weight in STAT_WEIGHTS.items():
+            diff = avgs_a[key] - avgs_b[key]
+            cost += weight * (diff ** 2)
+
+        # On choisit la combinaison avec le coût minimal
+        if best is None or cost < best_cost:
+            best_cost = cost
+            best = (team_a, team_b, avgs_a, avgs_b)
+
+    if best is None:
+        raise RuntimeError("Impossible de calculer un équilibrage d'équipes.")
+
+    return best  # team_a_ids, team_b_ids, avgs_a, avgs_b
 
 
 class Matches(commands.Cog):
@@ -44,13 +90,10 @@ class Matches(commands.Cog):
         guest_id : id négatif courant pour générer un invité
 
         Retourne:
-          (player_id, name, rating, is_guest, new_guest_id)
+          (player_id, name, rating, is_guest, stats_dict, new_guest_id)
 
-        Règles :
-        - token = '*** 7' ou '***7' -> invité note 7 (1–10)
-        - @mention -> joueur existant, note venant du profil
-        - pseudo exact d'un joueur -> joueur existant, note venant du profil
-        - sinon -> erreur
+        stats_dict contient :
+          tir, passes, physique, influence, gardien, rating
         """
         token = token.strip()
 
@@ -60,9 +103,19 @@ class Matches(commands.Cog):
             note = int(m_guest.group(1))
             if note < 1 or note > 10:
                 raise ValueError(f"La note pour l'invité doit être entre 1 et 10 (reçu: {note}).")
+
             name = "Invité"
-            rating = note
-            return guest_id, name, rating, True, guest_id - 1
+            rating = float(note)
+            # Pour un invité, on met toutes les stats à la même valeur
+            stats = {
+                "rating": rating,
+                "tir": rating,
+                "passes": rating,
+                "physique": rating,
+                "influence": rating,
+                "gardien": rating,
+            }
+            return guest_id, name, rating, True, stats, guest_id - 1
 
         # 2) Cas mention <@123...>
         m_mention = self._mention_re.fullmatch(token)
@@ -71,14 +124,32 @@ class Matches(commands.Cog):
             pdata = players.get(str(uid))
             if not pdata:
                 raise ValueError(f"{token} n'a pas de profil (/set_joueur).")
+
             name = pdata["name"]
-            rating = pdata["rating"]
-            return uid, name, rating, False, guest_id
+            rating = float(pdata["rating"])
+            stats = {
+                "rating": rating,
+                "tir": float(pdata.get("tir", rating)),
+                "passes": float(pdata.get("passes", rating)),
+                "physique": float(pdata.get("physique", rating)),
+                "influence": float(pdata.get("influence", rating)),
+                "gardien": float(pdata.get("gardien", rating)),
+            }
+            return uid, name, rating, False, stats, guest_id
 
         # 3) Cas pseudo exact d'un joueur enregistré
         for p in players.values():
             if p["name"].lower() == token.lower():
-                return p["id"], p["name"], p["rating"], False, guest_id
+                rating = float(p["rating"])
+                stats = {
+                    "rating": rating,
+                    "tir": float(p.get("tir", rating)),
+                    "passes": float(p.get("passes", rating)),
+                    "physique": float(p.get("physique", rating)),
+                    "influence": float(p.get("influence", rating)),
+                    "gardien": float(p.get("gardien", rating)),
+                }
+                return p["id"], p["name"], rating, False, stats, guest_id
 
         # 4) Sinon -> erreur explicite
         raise ValueError(
@@ -126,42 +197,42 @@ class Matches(commands.Cog):
 
         players_data = self.data.get_players()
         guest_id = -1
-        match_players = {}        # id -> {name, rating, is_guest}
-        players_with_rating = []  # (id, rating)
+        match_players = {}        # id -> {name, rating, is_guest, stats}
+        players_stats = {}        # id -> stats dict (tir, passes, ...)
 
         # Résolution de chaque pseudo / mention / *** 7
         try:
             for token in slots:
-                pid, name, rating, is_guest, guest_id = self._resolve_slot(
+                pid, name, rating, is_guest, stats, guest_id = self._resolve_slot(
                     token, players_data, guest_id
                 )
                 match_players[pid] = {
                     "name": name,
                     "rating": rating,
                     "is_guest": is_guest,
+                    "stats": stats,
                 }
-                players_with_rating.append((pid, rating))
+                players_stats[pid] = stats
         except ValueError as e:
             await interaction.response.send_message(f"❌ {e}", ephemeral=True)
             return
 
-        # Équilibrage des équipes (invités inclus)
-        team_a_ids, team_b_ids, sum_a, sum_b = balance_teams(players_with_rating)
+        # Équilibrage multi-stats pondéré
+        team_a_ids, team_b_ids, avgs_a, avgs_b = balance_teams(players_stats)
 
         # Enregistrement du match
         match = self.data.create_match(team_a_ids, team_b_ids, interaction.channel_id)
 
-        total_a = sum(match_players[pid]["rating"] for pid in team_a_ids)
-        total_b = sum(match_players[pid]["rating"] for pid in team_b_ids)
+        avg_rating_a = avgs_a["rating"]
+        avg_rating_b = avgs_b["rating"]
 
-        if total_a > total_b:
+        if avg_rating_a > avg_rating_b:
             favorite = "Équipe A 🔴"
-        elif total_b > total_a:
+        elif avg_rating_b > avg_rating_a:
             favorite = "Équipe B 🔵"
         else:
             favorite = "Équipes à égalité ⚖️"
 
-        # Tableau côte à côte
         # Tableau vertical lisible pour téléphone
         lines = []
 
@@ -179,13 +250,24 @@ class Matches(commands.Cog):
 
         teams_table = "```txt\n" + "\n".join(lines) + "\n```"
 
+        # Résumé des moyennes de stats par équipe
+        def fmt_avgs(label: str, avgs: dict[str, float]) -> str:
+            return (
+                f"{label} — moyennes :\n"
+                f"- Tir : **{avgs['tir']:.1f}**\n"
+                f"- Passes : **{avgs['passes']:.1f}**\n"
+                f"- Physique : **{avgs['physique']:.1f}**\n"
+                f"- Influence : **{avgs['influence']:.1f}**\n"
+                f"- Gardien : **{avgs['gardien']:.1f}**\n"
+                f"- Note globale : **{avgs['rating']:.1f}**"
+            )
 
         description = (
             f"**Match #{match['id']}** créé !\n\n"
-            f"🔴 **Équipe A** (Total: **{total_a}**)\n"
-            f"🔵 **Équipe B** (Total: **{total_b}**)\n\n"
+            f"{fmt_avgs('🔴 Équipe A', avgs_a)}\n\n"
+            f"{fmt_avgs('🔵 Équipe B', avgs_b)}\n\n"
             f"{teams_table}\n"
-            f"**Équipe favorite** : {favorite}\n\n"
+            f"**Équipe favorite** (sur la note globale moyenne) : {favorite}\n\n"
             f"➡️ Pensez à noter l'ID du match : **#{match['id']}** "
             f"(utile pour le résultat, le MVP et les stats)."
         )
@@ -328,7 +410,7 @@ class Matches(commands.Cog):
             ephemeral=True
         )
 
-    #fin mvp
+    # ---------------- FIN MVP ----------------
 
     @app_commands.command(
         name="fin_mvp",
@@ -437,7 +519,7 @@ class Matches(commands.Cog):
         else:
             winners_names = ", ".join(name_for(pid) for pid in winners)
             share = 1.0 / len(winners)
-            share_str = f"{share:.2f}".rstrip("0").rstrip(".")  # 0.5 → '0.5', 0.33 → '0.33'
+            share_str = f"{share:.2f}".rstrip("0").rstrip(".")
             if just_closed:
                 mvp_line = (
                     f"🏆 **MVP ex æquo : {winners_names}**\n"
@@ -539,6 +621,64 @@ class Matches(commands.Cog):
 
         embed.add_field(name="Total buts (tous matchs)", value=str(updated["goals"]), inline=True)
         embed.add_field(name="Total passes (tous matchs)", value=str(updated["assists"]), inline=True)
+
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="supprimer_match",
+        description="Supprime définitivement un match à partir de son ID."
+    )
+    @app_commands.describe(
+        match_id="ID du match à supprimer (affiché lors de /creer_match)."
+    )
+    async def supprimer_match(
+        self,
+        interaction: discord.Interaction,
+        match_id: int
+    ):
+        # On vérifie d'abord s'il existe
+        match = self.data.get_match(match_id)
+        if not match:
+            await interaction.response.send_message(
+                f"❌ Aucun match trouvé avec l'ID **#{match_id}**.",
+                ephemeral=True
+            )
+            return
+
+        # Optionnel : tu peux protéger la commande pour que seuls les admins l'utilisent
+        # if not interaction.user.guild_permissions.administrator:
+        #     await interaction.response.send_message(
+        #         "❌ Tu n'as pas la permission de supprimer des matchs.",
+        #         ephemeral=True
+        #     )
+        #     return
+
+        removed = self.data.delete_match(match_id)
+        if not removed:
+            await interaction.response.send_message(
+                f"❌ Impossible de supprimer le match **#{match_id}** (erreur interne).",
+                ephemeral=True
+            )
+            return
+
+        # Petit récap dans l'embed
+        score_a = removed.get("score_a")
+        score_b = removed.get("score_b")
+
+        if score_a is not None and score_b is not None:
+            score_txt = f"Score enregistré : 🔴 {score_a} - {score_b} 🔵"
+        else:
+            score_txt = "Aucun score n'avait encore été enregistré pour ce match."
+
+        embed = discord.Embed(
+            title=f"🗑️ Match #{match_id} supprimé",
+            description=(
+                "Le match a été retiré de l'historique.\n\n"
+                f"{score_txt}\n\n"
+                "_Les stats déjà ajoutées aux joueurs **ne sont pas modifiées**._"
+            ),
+            color=discord.Color.red()
+        )
 
         await interaction.response.send_message(embed=embed)
 

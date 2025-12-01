@@ -7,26 +7,62 @@ class Misc(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="aide", description="Affiche l'aide du bot et les commandes disponibles.")
+    @app_commands.command(name="aide", description="Affiche toutes les commandes du bot Five.")
     async def aide(self, interaction: discord.Interaction):
+
         embed = discord.Embed(
             title="🤖 Aide du bot Five",
-            description=(
-                "Voici les principales commandes disponibles :\n\n"
-                "• `/set_joueur` — Créer / modifier un joueur avec une note sur 10.\n"
-                "• `/liste_joueurs` — Liste de tous les joueurs enregistrés.\n"
-                "• `/creer_match` — Créer un match 5v5 avec équipes équilibrées.\n"
-                "• `/resultat_match` — Enregistrer le résultat d'un match.\n"
-                "• `/vote_mvp` — Voter pour le MVP d'un match (24h).\n"
-                "• `/ajouter_stats` — Ajouter buts/passes à un joueur.\n"
-                "• `/classement` — Classement général.\n"
-                "• `/classement_buts` — Meilleurs buteurs.\n"
-                "• `/classement_passes` — Meilleurs passeurs.\n"
-                "• `/stats_joueur` — Stats détaillées d'un joueur.\n"
-            ),
+            description="Voici toutes les commandes disponibles :",
             color=discord.Color.teal()
         )
-        embed.set_footer(text="Bot Five — crée ton classement perso entre potes ⚽")
+
+        # --- Gestion Joueurs ---
+        embed.add_field(
+            name="Joueurs",
+            value=(
+                "• **/set_joueur** — Créer / modifier un joueur et ses stats.\n"
+                "• **/liste_joueurs** — Voir tous les joueurs enregistrés.\n"
+                "• **/stats_joueur** — Voir la carte FUT + stats complètes.\n"
+                "• **/personnaliser_carte** — Couleur, bordure, texte personnalisés.\n"
+            ),
+            inline=False
+        )
+
+        # --- Matchmaking ---
+        embed.add_field(
+            name="Matchs",
+            value=(
+                "• **/creer_match** — Créer un match 5v5 équilibré.\n"
+                "• **/resultat_match** — Enregistrer le score.\n"
+                "• **/ajouter_stats** — Ajouter buts/passes d’un match.\n"
+                "• **/supprimer_match** — Supprimer un match via son ID.\n"
+            ),
+            inline=False
+        )
+
+        # --- MVP ---
+        embed.add_field(
+            name="MVP",
+            value=(
+                "• **/vote_mvp** — Voter pour le MVP d’un match.\n"
+                "• **/fin_mvp** — Clôturer le MVP et afficher le résultat.\n"
+            ),
+            inline=False
+        )
+
+        # --- Classements ---
+        embed.add_field(
+            name="Classements",
+            value=(
+                "• **/classement** — Classement général (points, victoires…).\n"
+                "• **/classement_buts** — Meilleurs buteurs.\n"
+                "• **/classement_passes** — Meilleurs passeurs.\n"
+                "• **/classement_stats** — Classement des notes (tir, passes, physique, influence, gardien, note globale).\n"
+            ),
+            inline=False
+        )
+
+        embed.set_footer(text="Bot Five — Le bot ultime pour organiser vos matchs ⚽🔥")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
